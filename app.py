@@ -176,19 +176,58 @@ def auth(cred: HTTPBasicCredentials = Depends(security)):
         raise HTTPException(401, headers={"WWW-Authenticate": "Basic"})
 
 
+CSS = """
+:root{--bg:#f6f7fb;--card:#fff;--ink:#1d2433;--muted:#6b7280;--brand:#5b5bf0;--line:#e8eaf2}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif}
+.wrap{max-width:1000px;margin:0 auto;padding:28px 18px}
+h1{font-size:28px;margin:0 0 2px}
+h2{margin:12px 0 14px}
+h3{margin:28px 0 10px}
+.sub{color:var(--muted);margin:0 0 18px}
+a{color:var(--brand);text-decoration:none}
+a:hover{text-decoration:underline}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin:16px 0}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px;box-shadow:0 1px 2px rgba(16,24,40,.04)}
+.stat b{display:block;font-size:22px;margin-bottom:2px}
+.stat span{color:var(--muted);font-size:13px}
+.filters{margin:6px 0 14px}
+.filters a{display:inline-block;padding:6px 14px;border-radius:999px;background:#fff;border:1px solid var(--line);color:var(--ink);font-size:13px;margin:0 6px 6px 0}
+.filters a:hover{border-color:var(--brand);color:var(--brand);text-decoration:none}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:6px 14px;box-shadow:0 1px 2px rgba(16,24,40,.04);overflow-x:auto}
+table{width:100%;border-collapse:collapse;min-width:640px}
+th{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em;text-align:left;padding:12px 8px}
+td{padding:12px 8px;border-top:1px solid var(--line);font-size:14px;vertical-align:middle}
+tr:hover td{background:#fafbff}
+.empty{text-align:center;color:var(--muted);padding:30px}
+.tag{padding:4px 10px;border-radius:999px;font-size:12px;font-weight:600;border:0;background:#eef0ff;color:#4338ca;cursor:pointer}
+.tag.new{background:#e0ecff;color:#1d4ed8}
+.tag.in_progress{background:#fff3d6;color:#a15c00}
+.tag.ready{background:#dcfce7;color:#15803d}
+.tag.delivered{background:#e5e7eb;color:#374151}
+.tag.cancelled{background:#fee2e2;color:#b91c1c}
+.formcard{background:#fff;border:1px solid var(--line);border-radius:16px;padding:22px;max-width:560px;box-shadow:0 1px 2px rgba(16,24,40,.04)}
+input,select,textarea{width:100%;padding:10px 12px;margin:4px 0 14px;border:1px solid var(--line);border-radius:10px;font:inherit;background:#fff}
+input:focus,select:focus,textarea:focus{outline:2px solid #c7c9ff;border-color:var(--brand)}
+button{background:var(--brand);color:#fff;border:0;border-radius:10px;padding:11px 20px;font-weight:600;font-size:15px;cursor:pointer}
+button:hover{opacity:.92}
+.step{display:inline-block;padding:7px 14px;border-radius:999px;background:#eceef5;color:var(--muted);font-size:13px;margin:0 6px 8px 0}
+.on{background:#16a34a;color:#fff;font-weight:600}
+"""
+
+
 def page(title, body):
-    return HTMLResponse(f"""<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>{e(title)}</title>
-<style>
-body{{font-family:system-ui,sans-serif;max-width:920px;margin:24px auto;padding:0 16px;color:#222}}
-table{{width:100%;border-collapse:collapse}}
-td,th{{border-bottom:1px solid #ddd;padding:8px;text-align:left;font-size:14px}}
-.tag{{padding:2px 10px;border-radius:12px;background:#e8ecff}}
-input,select,textarea{{width:100%;padding:8px;margin:4px 0 12px;box-sizing:border-box}}
-button{{padding:10px 18px;cursor:pointer}}
-.step{{display:inline-block;padding:6px 12px;border-radius:12px;background:#eee;margin-right:6px}}
-.on{{background:#2e7d32;color:#fff}}
-</style></head><body>{body}</body></html>""")
+    return HTMLResponse(
+        '<!doctype html><html><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        f"<title>{e(title)}</title><style>{CSS}</style></head>"
+        f'<body><div class="wrap">{body}</div></body></html>')
+
+
+def status_options(current):
+    return "".join(
+        f"<option value='{s}' {'selected' if s == current else ''}>{s.replace('_', ' ')}</option>"
+        for s in STATUSES)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -196,24 +235,51 @@ def home(status: str | None = None, _: None = Depends(auth)):
     with db() as c:
         biz = c.execute("SELECT * FROM business WHERE id=1").fetchone()
         services = c.execute("SELECT * FROM services").fetchall()
+        allrows = c.execute("SELECT * FROM orders").fetchall()
         if status:
             rows = c.execute("SELECT * FROM orders WHERE status=? ORDER BY due", (status,)).fetchall()
         else:
             rows = c.execute("SELECT * FROM orders ORDER BY due").fetchall()
     name = e(biz["name"]) if biz else "Your business"
-    filters = " | ".join(f'<a href="/?status={s}">{s}</a>' for s in STATUSES) + ' | <a href="/">all</a>'
+    active = sum(1 for r in allrows if r["status"] in ("new", "in_progress"))
+    ready = sum(1 for r in allrows if r["status"] == "ready")
+    pending = sum(r["total"] - r["advance_paid"] for r in allrows if r["status"] != "cancelled")
+    stats = f"""<div class="stats">
+<div class="stat"><b>{len(allrows)}</b><span>Total orders</span></div>
+<div class="stat"><b>{active}</b><span>Active orders</span></div>
+<div class="stat"><b>{ready}</b><span>Ready for pickup</span></div>
+<div class="stat"><b>Rs {pending:.0f}</b><span>Payment pending</span></div></div>"""
+    filters = "".join(
+        f'<a href="/?status={s}">{s.replace("_", " ")}</a>' for s in STATUSES) + '<a href="/">All</a>'
     trs = "".join(
-        f"<tr><td>{e(r['due'])}</td><td>{e(r['customer_name'])}</td><td>{e(r['items'])}</td>"
-        f"<td>Rs {r['total']:.0f}</td><td>Rs {r['total'] - r['advance_paid']:.0f}</td>"
-        f"<td><span class='tag'>{r['status']}</span></td><td><a href='/order/{r['id']}'>Edit</a></td></tr>"
+        f"<tr><td>{e(r['due'])}</td>"
+        f"<td><b>{e(r['customer_name'])}</b><br><small style='color:#6b7280'>{e(r['customer_phone'] or '')}</small></td>"
+        f"<td>{e(r['items'])}</td><td>Rs {r['total']:.0f}</td><td>Rs {r['total'] - r['advance_paid']:.0f}</td>"
+        f"<td><form method='post' action='/order/{r['id']}/status' style='margin:0'>"
+        f"<select name='status' class='tag {r['status']}' style='width:auto;margin:0' "
+        f"onchange='this.form.submit()'>{status_options(r['status'])}</select></form></td>"
+        f"<td><a href='/order/{r['id']}'>Edit</a></td></tr>"
         for r in rows)
+    if not trs:
+        trs = "<tr><td colspan='7' class='empty'>No orders yet. Ask Claude to create one.</td></tr>"
     svc = "".join(
-        f"<li>{e(s['name'])}: Rs {s['price']:.0f} ({s['lead_time_days']} day notice)</li>"
+        f"<div class='stat'><b>{e(s['name'])}</b><span>Rs {s['price']:.0f} | {s['lead_time_days']} day notice</span></div>"
         for s in services)
-    body = f"""<h1>{name}: Order Desk</h1><p>{filters}</p>
-<table><tr><th>Due</th><th>Customer</th><th>Items</th><th>Total</th><th>Balance</th><th>Status</th><th></th></tr>
-{trs}</table><h3>Services</h3><ul>{svc}</ul>"""
+    body = f"""<h1>{name}</h1><p class="sub">Order Desk</p>{stats}
+<div class="filters">{filters}</div>
+<div class="card"><table>
+<tr><th>Due</th><th>Customer</th><th>Items</th><th>Total</th><th>Balance</th><th>Status</th><th></th></tr>
+{trs}</table></div>
+<h3>Services</h3><div class="stats">{svc}</div>"""
     return page(name, body)
+
+
+@app.post("/order/{oid}/status")
+def quick_status(oid: int, status: str = Form(...), _: None = Depends(auth)):
+    if status in STATUSES:
+        with db() as c:
+            c.execute("UPDATE orders SET status=? WHERE id=?", (status, oid))
+    return RedirectResponse("/", status_code=303)
 
 
 @app.get("/order/{oid}", response_class=HTMLResponse)
@@ -222,22 +288,18 @@ def edit_form(oid: int, _: None = Depends(auth)):
         r = c.execute("SELECT * FROM orders WHERE id=?", (oid,)).fetchone()
     if not r:
         raise HTTPException(404)
-    opts = ""
-    for s in STATUSES:
-        sel = "selected" if s == r["status"] else ""
-        opts += f"<option value='{s}' {sel}>{s}</option>"
-    body = f"""<a href="/">Back</a><h2>Order #{r['id']}</h2>
-<form method="post">
+    body = f"""<a href="/">&larr; Back to orders</a><h2>Order #{r['id']}</h2>
+<div class="formcard"><form method="post">
 Customer<input name="customer_name" value="{e(r['customer_name'])}">
 Phone<input name="customer_phone" value="{e(r['customer_phone'] or '')}">
 Items<textarea name="items" rows="2">{e(r['items'])}</textarea>
 Due (YYYY-MM-DD HH:MM)<input name="due" value="{e(r['due'])}">
 Total (Rs)<input name="total" type="number" step="any" value="{r['total']}">
 Advance paid (Rs)<input name="advance_paid" type="number" step="any" value="{r['advance_paid']}">
-Status<select name="status">{opts}</select>
+Status<select name="status">{status_options(r['status'])}</select>
 Notes<textarea name="notes" rows="2">{e(r['notes'] or '')}</textarea>
-<button type="submit">Save</button></form>
-<p>Customer link: <a href="/o/{r['code']}">/o/{r['code']}</a></p>"""
+<button type="submit">Save changes</button></form></div>
+<p>Customer link: <a href="/o/{r['code']}" target="_blank">/o/{r['code']}</a></p>"""
     return page("Edit order", body)
 
 
@@ -266,11 +328,10 @@ def public_status(code: str):
         on = "on" if s == r["status"] else ""
         steps += f"<span class='step {on}'>{s.replace('_', ' ')}</span>"
     shop = e(biz["name"]) if biz else "Your order"
-    body = f"""<h2>{shop}</h2><p>Hi {e(r['customer_name'])}, here is your order status.</p>
+    body = f"""<div class="formcard"><h2>{shop}</h2>
+<p>Hi {e(r['customer_name'])}, here is your order status.</p>
 <p>{steps}</p><p><b>Items:</b> {e(r['items'])}</p><p><b>Due:</b> {e(r['due'])}</p>
-<p><b>Balance to pay:</b> Rs {r['total'] - r['advance_paid']:.0f}</p>"""
+<p><b>Balance to pay:</b> Rs {r['total'] - r['advance_paid']:.0f}</p></div>"""
     return page("Order status", body)
-
-
 # keep this LAST so the MCP endpoint lives at /mcp without hiding the pages above
 app.mount("/", mcp.streamable_http_app())
